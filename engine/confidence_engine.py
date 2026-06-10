@@ -1,5 +1,6 @@
 from models.learning_state import learning_state
 
+
 def initialize_topic(topic):
 
     if topic not in learning_state["topics"]:
@@ -18,11 +19,16 @@ def initialize_topic(topic):
 
             "completed_concepts": [],
 
-            "learning_streak": 0
+            "learning_streak": 0,
+
+            "last_question_type": None
         }
 
 
-def update_topic_confidence(topic, is_correct):
+def update_topic_confidence(
+    topic,
+    is_correct
+):
 
     topic_data = learning_state["topics"][topic]
 
