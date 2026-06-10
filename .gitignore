@@ -1,0 +1,35 @@
+```gitignore
+# Virtual Environment
+venv/
+env/
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment Variables
+.env
+
+# VS Code
+.vscode/
+
+# PyCharm
+.idea/
+
+# Mac Files
+.DS_Store
+
+# Windows Files
+Thumbs.db
+
+# Session / Temp Data
+data/session_data.json
+
+# Logs
+*.log
+
+# Ollama Temp
+ollama.log
+```
