@@ -4,35 +4,31 @@ import json
 from utils.constants import MODEL_NAME
 
 
+def load_prompt(path):
+
+    with open(path, "r", encoding="utf-8") as file:
+
+        return file.read()
+
+
 def evaluate_answer(
     question,
     correct_answer,
     user_answer
 ):
 
-    prompt = f"""
-You are an intelligent evaluator.
+    evaluation_prompt = load_prompt(
+        "prompts/evaluation_prompt.txt"
+    )
 
-QUESTION:
-{question}
+    prompt = evaluation_prompt.format(
 
-CORRECT ANSWER:
-{correct_answer}
+        question=question,
 
-USER ANSWER:
-{user_answer}
+        correct_answer=correct_answer,
 
-Evaluate whether the user's answer is conceptually correct.
-
-Return ONLY valid JSON.
-
-FORMAT:
-
-{{
-   "is_correct": true,
-   "feedback": ""
-}}
-"""
+        user_answer=user_answer
+    )
 
     response = ollama.chat(
 
@@ -49,8 +45,8 @@ FORMAT:
     text = response["message"]["content"]
 
     text = text.replace("```json", "")
-    text = text.replace("```", "").strip()
+    text = text.replace("```", "")
+    text = text.strip()
 
-    result = json.loads(text)
+    return json.loads(text)
 
-    return result
