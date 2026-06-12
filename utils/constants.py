@@ -1,1 +1,0 @@
-MODEL_NAME = "gemma3:4b"
