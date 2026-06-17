@@ -1,0 +1,7 @@
+pytest
+rapidfuzz
+sentence-transformers
+langchain
+langchain-chroma
+langchain-huggingface
+chromadb

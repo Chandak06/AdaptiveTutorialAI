@@ -2,7 +2,18 @@ from __future__ import annotations
 
 import time
 from typing import Any
-
+from adaptive_tutor.assessment.question_ranker import (
+    QuestionRanker,
+)
+from adaptive_tutor.assessment.difficulty_agent import (
+    DifficultyAgent,
+)
+from adaptive_tutor.rag.chain import (
+    store_generated_question,
+)
+from adaptive_tutor.learner_model.profile import (
+    LearnerProfile,
+)
 from adaptive_tutor.analytics import AnalyticsTracker, build_session_report, build_topic_report
 from adaptive_tutor.config import MAX_HISTORY, QUESTION_LABELS
 from adaptive_tutor.curriculum import ProgressionEngine, RoadmapGenerator, update_concept_mastery
@@ -29,6 +40,9 @@ class AdaptiveTutorApp:
         self.roadmap_generator = RoadmapGenerator(self.llm_client)
         self.analytics_tracker = AnalyticsTracker()
         self.analytics_tracker.sync(self.session)
+        self.question_ranker = QuestionRanker()
+        self.difficulty_agent = DifficultyAgent()
+        self.learner_profile = LearnerProfile()
 
     def run(self) -> None:
         print("\n=== AdaptiveTutorAI ===\n")
@@ -64,12 +78,28 @@ class AdaptiveTutorApp:
         normalized_name = " ".join(topic_name.split())
 
         for saved_name, saved_topic in self.session["topics"].items():
+
             if saved_name.casefold() == normalized_name.casefold():
+                saved_topic.setdefault(
+                    "difficulty_history",
+                    [],
+                )
+                saved_topic.setdefault(
+                    "misconceptions",
+                    [],
+                )
+                saved_topic.setdefault(
+                    "generated_question_count",
+                    0,
+                )
                 self.session["current_topic"] = saved_name
                 return saved_topic
 
         roadmap = self.roadmap_generator.build(normalized_name)
         topic_state = create_topic_state(normalized_name, roadmap)
+        topic_state.setdefault("difficulty_history",[])
+        topic_state.setdefault("misconceptions",[])
+        topic_state.setdefault( "generated_question_count",0)
         self.session["topics"][normalized_name] = topic_state
         self.session["topic_order"].append(normalized_name)
         self.session["current_topic"] = normalized_name
@@ -141,7 +171,47 @@ class AdaptiveTutorApp:
             "recent_history": topic_state["conversation"]["history"][-6:],
             "peer_concepts": peer_concepts,
         }
-        return self.llm_client.generate_lesson(request)
+        lesson = self.llm_client.generate_lesson(request)
+
+        if lesson is None:
+            print("Failed to generate lesson.")
+            return {
+                "message": "Lesson generation failed.",
+                "question": {
+                    "type": "short_answer",
+                    "prompt": "Explain the topic.",
+                    "answer": "",
+                    "options": [],
+                    "rubric": [],
+                },
+                "hint": "",
+                "answer_explanation": "",
+                "takeaways": [],
+            }
+
+        ranking = self.question_ranker.rank(
+            lesson["question"]["prompt"]
+        )
+        topic_state["difficulty_history"].append(ranking["difficulty_score"])
+        topic_state["generated_question_count"] += 1
+
+        store_generated_question(
+            lesson["question"]["prompt"],
+            {
+                "topic": topic_state["topic"],
+                "concept": target["concept_name"],
+                "difficulty": ranking["difficulty"],
+                "bloom_level": ranking["bloom_level"],
+            },
+        )
+
+        self.learner_profile.add_question(
+            lesson["question"]["prompt"],
+            ranking["difficulty_score"],
+            ranking["bloom_level"],
+        )
+
+        return lesson
 
     def _display_lesson(
         self,
@@ -236,14 +306,15 @@ class AdaptiveTutorApp:
         print(lesson["answer_explanation"] or "Review the core idea and compare it to your answer.")
 
     def _apply_result(
-        self,
-        topic_state: dict[str, Any],
-        target: dict[str, Any],
-        lesson: dict[str, Any],
-        user_answer: str,
-        evaluation: dict[str, Any],
-        elapsed_seconds: float,
+    self,
+    topic_state: dict[str, Any],
+    target: dict[str, Any],
+    lesson: dict[str, Any],
+    user_answer: str,
+    evaluation: dict[str, Any],
+    elapsed_seconds: float,
     ) -> None:
+
         self.session["global_turn"] += 1
         topic_state["turns_on_topic"] += 1
         topic_state["updated_at"] = utc_now_iso()
@@ -255,8 +326,56 @@ class AdaptiveTutorApp:
             question_type=target["question_type"],
         )
 
-        concept = topic_state["concepts"][target["concept_id"]]
-        concept["last_seen_turn"] = self.session["global_turn"]
+        concept = topic_state["concepts"][
+            target["concept_id"]
+        ]
+
+        concept["last_seen_turn"] = (
+            self.session["global_turn"]
+        )
+
+        # =====================================
+        # Misconception Tracking
+        # =====================================
+
+        if evaluation.get(
+            "misconception",
+            False,
+        ):
+
+            if (
+                target["concept_name"]
+                not in topic_state["misconceptions"]
+            ):
+                topic_state["misconceptions"].append(
+                    target["concept_name"]
+                )
+
+            self.learner_profile.add_misconception(
+                target["concept_name"]
+            )
+
+        # =====================================
+        # Learner Profile Updates
+        # =====================================
+
+        self.learner_profile.update_mastery(
+            target["concept_name"],
+            concept["accuracy"],
+        )
+
+        self.learner_profile.update_confidence(
+            target["concept_name"],
+            topic_state["confidence"],
+        )
+
+        self.learner_profile.record_result(
+            evaluation["is_correct"]
+        )
+
+        # =====================================
+        # Revision Scheduling
+        # =====================================
 
         self.revision_scheduler.schedule(
             topic_state=topic_state,
@@ -264,28 +383,67 @@ class AdaptiveTutorApp:
             current_turn=self.session["global_turn"],
             is_correct=evaluation["is_correct"],
         )
-        self.progression_engine.sync_position(topic_state)
 
-        self._add_history(topic_state, "assistant", lesson["message"])
-        self._add_history(topic_state, "assistant", lesson["question"]["prompt"])
-        self._add_history(topic_state, "user", user_answer)
-        self._add_history(topic_state, "assistant", evaluation["feedback"])
+        self.progression_engine.sync_position(
+            topic_state
+        )
+
+        # =====================================
+        # Conversation History
+        # =====================================
+
+        self._add_history(
+            topic_state,
+            "assistant",
+            lesson["message"],
+        )
+
+        self._add_history(
+            topic_state,
+            "assistant",
+            lesson["question"]["prompt"],
+        )
+
+        self._add_history(
+            topic_state,
+            "user",
+            user_answer,
+        )
+
+        self._add_history(
+            topic_state,
+            "assistant",
+            evaluation["feedback"],
+        )
+
+        # =====================================
+        # Analytics
+        # =====================================
 
         self.analytics_tracker.record_interaction(
             session=self.session,
             topic_state=topic_state,
             elapsed_seconds=elapsed_seconds,
             is_correct=evaluation["is_correct"],
-            was_revision=(target["mode"] == "revision"),
+            was_revision=(
+                target["mode"] == "revision"
+            ),
         )
 
         if topic_state["completed"]:
-            topic_state["analytics"]["topics_completed"] = 1
+            topic_state["analytics"][
+                "topics_completed"
+            ] = 1
 
         if concept_result["mastered_now"]:
-            self.revision_scheduler.clear(topic_state, target["concept_id"])
+            self.revision_scheduler.clear(
+                topic_state,
+                target["concept_id"],
+            )
 
-        self.save_manager.save_session(self.session)
+        self.save_manager.save_session(
+            self.session
+        )
 
     def _add_history(
         self,
@@ -329,5 +487,16 @@ class AdaptiveTutorApp:
             f"- Learning streak: {report['learning_streak']}\n"
             f"- Concepts mastered: {report['completed_concepts']}\n"
             f"- Revision queue: {report['revision_queue_size']}\n"
+            f"- Average Difficulty: {report['average_difficulty']}\n"
+            f"- Generated Questions: {report['generated_question_count']}\n"
+            f"- Misconceptions: {len(report['misconceptions'])}\n"
             f"- Weak areas: {', '.join(report['weak_areas']) if report['weak_areas'] else 'None'}"
         )
+
+def main():
+    app = AdaptiveTutorApp()
+    app.run()
+
+
+if __name__ == "__main__":
+    main()
