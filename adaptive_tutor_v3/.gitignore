@@ -1,0 +1,80 @@
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / Packaging
+build/
+dist/
+*.egg-info/
+
+# Logs
+*.log
+
+# Environment Variables
+.env
+.env.local
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# FastAPI
+.pytest_cache/
+.coverage
+htmlcov/
+
+# VS Code
+.vscode/
+
+# JetBrains IDEs
+.idea/
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Session Data
+session_data.json
+
+# Generated Data
+data/*.json
+data/*.csv
+
+# Secrets
+secrets/
+credentials.json
+firebase_key.json
+serviceAccountKey.json
+
+# Uploads
+uploads/
+
+# Temporary Files
+temp/
+tmp/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# MyPy
+.mypy_cache/
+
+# Ruff
+.ruff_cache/
+
+# Pyright
+.pyright/
+
+# Node Modules (if frontend exists)
+node_modules/
+
+# React/Vite Build
+frontend/dist/
+frontend/build/
